@@ -1,15 +1,22 @@
+
 name: Build Facebook Web APK
 
 on:
-  workflow_dispatch:
   push:
+    branches:
+      - main
     paths:
       - 'FacebookWebAndroid_Project.zip'
       - '.github/workflows/build-apk.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -22,6 +29,8 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: 12266719
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -29,15 +38,55 @@ jobs:
           gradle-version: '8.9'
 
       - name: Extract project ZIP
-        run: unzip -o FacebookWebAndroid_Project.zip
+        run: |
+          test -f FacebookWebAndroid_Project.zip
+          mkdir -p extracted
+          unzip -o FacebookWebAndroid_Project.zip -d extracted
 
-      - name: Build APK
-        working-directory: FacebookWebAndroid
-        run: gradle assembleDebug
+      - name: Locate Android project
+        shell: bash
+        run: |
+          PROJECT_DIR=""
+
+          WRAPPER=$(find extracted -type f -name gradlew -print -quit)
+
+          if [ -n "$WRAPPER" ]; then
+            PROJECT_DIR=$(dirname "$WRAPPER")
+          else
+            SETTINGS=$(find extracted -type f \
+              \( -name settings.gradle -o -name settings.gradle.kts \) \
+              -print -quit)
+
+            if [ -n "$SETTINGS" ]; then
+              PROJECT_DIR=$(dirname "$SETTINGS")
+            fi
+          fi
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "Android Gradle project not found in ZIP."
+            find extracted -maxdepth 4 -type f | head -100
+            exit 1
+          fi
+
+          echo "PROJECT_DIR=$PROJECT_DIR" >> "$GITHUB_ENV"
+          echo "Found project at: $PROJECT_DIR"
+
+      - name: Build Debug APK
+        shell: bash
+        run: |
+          cd "$PROJECT_DIR"
+
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew assembleDebug --stacktrace
+          else
+            gradle assembleDebug --stacktrace
+          fi
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: Facebook-Web-debug-APK
-          path: FacebookWebAndroid/app/build/outputs/apk/debug/app-debug.apk
+          path: extracted/**/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          retention-days: 7
